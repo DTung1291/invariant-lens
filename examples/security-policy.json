@@ -1,0 +1,10 @@
+{
+  "name": "Fail-closed source security",
+  "description": "Reusable invariants for authorization and external evidence handling.",
+  "invariants": [
+    "Every public write that changes privileged state authenticates the transaction sender before the mutation.",
+    "A non-success HTTP response cannot produce an approval or verified outcome.",
+    "Every externally supplied GitHub file is fetched using the submitted immutable commit SHA as the API ref.",
+    "The overall verified outcome is derived by deterministic code and is not accepted directly from an LLM."
+  ]
+}
