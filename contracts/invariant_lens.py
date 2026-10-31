@@ -156,8 +156,20 @@ def _unknown_reports(invariants, reason):
 
 
 def _normalise_report(value, invariant_count):
-    """Return a bounded report, falling back to UNKNOWN on any malformed field."""
-    if not isinstance(value, dict) or set(value) != {"reports", "summary"}:
+    """Return a bounded report, falling back to UNKNOWN on unsafe fields.
+
+    JSON-mode providers occasionally return an already-serialized object or add
+    harmless explanatory keys.  Those representation differences must not turn
+    a well-formed proof into consensus failure.  We therefore project the
+    declared schema while still requiring every security-relevant field and
+    validating every citation later against the fetched source bytes.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return _unknown_reports([None] * invariant_count, "malformed leader report")
+    if not isinstance(value, dict) or not {"reports", "summary"}.issubset(value):
         return _unknown_reports([None] * invariant_count, "malformed leader report")
     rows = value.get("reports")
     if not isinstance(rows, list) or len(rows) != invariant_count:
@@ -165,7 +177,7 @@ def _normalise_report(value, invariant_count):
     clean = []
     for idx, row in enumerate(rows):
         required = {"invariant_index", "status", "citations", "reason", "counterexample", "coverage_milli"}
-        if not isinstance(row, dict) or set(row) != required:
+        if not isinstance(row, dict) or not required.issubset(row):
             return _unknown_reports([None] * invariant_count, "malformed leader report")
         status = row["status"]
         coverage = row["coverage_milli"]
@@ -180,7 +192,8 @@ def _normalise_report(value, invariant_count):
             return _unknown_reports([None] * invariant_count, "malformed leader report")
         clean_citations = []
         for citation in citations:
-            if not isinstance(citation, dict) or set(citation) != {"file_index", "start_line", "end_line", "quote"}:
+            citation_fields = {"file_index", "start_line", "end_line", "quote"}
+            if not isinstance(citation, dict) or not citation_fields.issubset(citation):
                 return _unknown_reports([None] * invariant_count, "malformed leader report")
             fi, start, end, quoted = citation["file_index"], citation["start_line"], citation["end_line"], citation["quote"]
             if type(fi) is not int or type(start) is not int or type(end) is not int or fi < 0 or start < 1 or end < start:

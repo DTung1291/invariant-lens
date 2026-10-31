@@ -330,6 +330,18 @@ class InvariantLensTests(unittest.TestCase):
         self.assertEqual(audit["outcome"], "INCONCLUSIVE")
         self.assertIn("coverage threshold", audit["summary"])
 
+    def test_json_string_and_extra_fields_are_projected_safely(self):
+        leader = report()
+        leader["provider_note"] = "ignored representation metadata"
+        leader["reports"][0]["provider_note"] = "ignored"
+        leader["reports"][0]["citations"][0]["provider_note"] = "ignored"
+        normal = self.module._normalise_report(json.dumps(leader), 1)
+
+        self.assertEqual(normal["reports"][0]["status"], "PASS")
+        self.assertEqual(normal["reports"][0]["citations"][0]["quote"], "assert sender == owner")
+        self.assertNotIn("provider_note", normal)
+        self.assertNotIn("provider_note", normal["reports"][0])
+
     def test_malformed_leader_output_becomes_inconclusive(self):
         audit = self.run_audit({"unexpected": True}, validator_accept(("UNKNOWN",)))
         self.assertEqual(audit["outcome"], "INCONCLUSIVE")
