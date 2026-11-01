@@ -129,16 +129,18 @@ network:
 ./scripts/check.sh
 ```
 
-Current suite: **28 tests**. It covers the happy paths plus mutable refs, SHA
+Current suite: **33 tests**. It covers the happy paths plus mutable refs, SHA
 mismatches, GitHub errors, forged citations, malformed model output, validator
 disagreement, duplicate audits, access-independent requester tracking, size
-limits, and deterministic outcome derivation.
+limits, provider response wrappers, exact source-span rebinding, and
+deterministic outcome derivation.
 
 The check script also runs the official `genvm-lint check` command and compares
 the generated ABI schema with the checked-in schema.
 
-Official `gltest` integration tests and finalized Studionet transactions will
-be recorded in `docs/DEPLOYMENT-EVIDENCE.md` before submission.
+A finalized Studionet deployment and end-to-end `VERIFIED` workflow are
+recorded in [`docs/DEPLOYMENT-EVIDENCE.md`](docs/DEPLOYMENT-EVIDENCE.md),
+including immutable Explorer links and the exact commit-pinned manifest.
 
 ## Hard boundaries
 
