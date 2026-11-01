@@ -342,6 +342,32 @@ class InvariantLensTests(unittest.TestCase):
         self.assertNotIn("provider_note", normal)
         self.assertNotIn("provider_note", normal["reports"][0])
 
+    def test_provider_representation_variants_are_normalised_safely(self):
+        leader = report()
+        row = leader["reports"][0]
+        row["invariant_index"] = "0"
+        row["status"] = "pass"
+        row["coverage_milli"] = "0.9"
+        row["citations"][0]["file_index"] = "0"
+        row["citations"][0]["start_line"] = "2"
+        row["citations"][0]["end_line"] = "2"
+        row["reason"] = "r" * 500
+        leader["summary"] = "s" * 800
+
+        wrapped = "```json\n" + json.dumps({"response": leader}) + "\n```"
+        normal = self.module._normalise_report(wrapped, 1)
+
+        self.assertEqual(normal["reports"][0]["status"], "PASS")
+        self.assertEqual(normal["reports"][0]["coverage_milli"], 900)
+        self.assertEqual(len(normal["reports"][0]["reason"]), self.module.MAX_REASON)
+        self.assertEqual(len(normal["summary"]), self.module.MAX_SUMMARY)
+
+    def test_single_report_object_is_accepted_for_single_invariant(self):
+        leader = report()
+        leader["reports"] = leader["reports"][0]
+        normal = self.module._normalise_report(leader, 1)
+        self.assertEqual(normal["reports"][0]["status"], "PASS")
+
     def test_malformed_leader_output_becomes_inconclusive(self):
         audit = self.run_audit({"unexpected": True}, validator_accept(("UNKNOWN",)))
         self.assertEqual(audit["outcome"], "INCONCLUSIVE")

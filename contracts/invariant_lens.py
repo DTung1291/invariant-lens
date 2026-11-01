@@ -168,10 +168,30 @@ def _normalise_report(value, invariant_count):
         try:
             value = json.loads(value)
         except Exception:
-            return _unknown_reports([None] * invariant_count, "malformed leader report")
+            # A small number of JSON-capable providers still surround the
+            # object with prose or a Markdown fence. Extracting the outermost
+            # object is representation cleanup only; every decision-bearing
+            # field is validated below.
+            start, end = value.find("{"), value.rfind("}")
+            if start < 0 or end <= start:
+                return _unknown_reports([None] * invariant_count, "malformed leader report")
+            try:
+                value = json.loads(value[start:end + 1])
+            except Exception:
+                return _unknown_reports([None] * invariant_count, "malformed leader report")
+    if isinstance(value, dict) and "reports" not in value:
+        for wrapper in ("result", "response", "data"):
+            nested = value.get(wrapper)
+            if isinstance(nested, (dict, list)):
+                value = nested
+                break
+    if isinstance(value, list):
+        value = {"reports": value, "summary": "Structured compliance report."}
     if not isinstance(value, dict) or not {"reports", "summary"}.issubset(value):
         return _unknown_reports([None] * invariant_count, "malformed leader report")
     rows = value.get("reports")
+    if isinstance(rows, dict) and invariant_count == 1:
+        rows = [rows]
     if not isinstance(rows, list) or len(rows) != invariant_count:
         return _unknown_reports([None] * invariant_count, "malformed leader report")
     clean = []
@@ -180,9 +200,23 @@ def _normalise_report(value, invariant_count):
         if not isinstance(row, dict) or not required.issubset(row):
             return _unknown_reports([None] * invariant_count, "malformed leader report")
         status = row["status"]
+        if isinstance(status, str):
+            status = status.strip().upper()
         coverage = row["coverage_milli"]
+        if type(coverage) is not int:
+            try:
+                numeric = float(str(coverage).strip())
+                coverage = int(round(numeric * 1000 if 0 <= numeric <= 1 else numeric))
+            except Exception:
+                coverage = -1
         citations = row["citations"]
-        if type(row["invariant_index"]) is not int or row["invariant_index"] != idx:
+        invariant_index = row["invariant_index"]
+        if type(invariant_index) is not int:
+            try:
+                invariant_index = int(str(invariant_index).strip())
+            except Exception:
+                invariant_index = -1
+        if invariant_index != idx:
             return _unknown_reports([None] * invariant_count, "malformed leader report")
         if status not in ("PASS", "FAIL", "UNKNOWN") or type(coverage) is not int or not 0 <= coverage <= 1000:
             return _unknown_reports([None] * invariant_count, "malformed leader report")
@@ -196,28 +230,32 @@ def _normalise_report(value, invariant_count):
             if not isinstance(citation, dict) or not citation_fields.issubset(citation):
                 return _unknown_reports([None] * invariant_count, "malformed leader report")
             fi, start, end, quoted = citation["file_index"], citation["start_line"], citation["end_line"], citation["quote"]
-            if type(fi) is not int or type(start) is not int or type(end) is not int or fi < 0 or start < 1 or end < start:
+            try:
+                fi, start, end = int(str(fi).strip()), int(str(start).strip()), int(str(end).strip())
+            except Exception:
                 return _unknown_reports([None] * invariant_count, "malformed leader report")
-            if not isinstance(quoted, str) or not quoted.strip() or len(quoted) > 300:
+            if fi < 0 or start < 1 or end < start:
+                return _unknown_reports([None] * invariant_count, "malformed leader report")
+            if not isinstance(quoted, str) or not quoted.strip() or len(quoted) > 1200:
                 return _unknown_reports([None] * invariant_count, "malformed leader report")
             clean_citations.append({"file_index": fi, "start_line": start, "end_line": end, "quote": quoted.strip()})
         reason, counterexample = row["reason"], row["counterexample"]
-        if not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_REASON:
+        if not isinstance(reason, str) or not reason.strip():
             return _unknown_reports([None] * invariant_count, "malformed leader report")
-        if not isinstance(counterexample, str) or not counterexample.strip() or len(counterexample) > MAX_COUNTEREXAMPLE:
+        if not isinstance(counterexample, str) or not counterexample.strip():
             return _unknown_reports([None] * invariant_count, "malformed leader report")
         clean.append({
             "invariant_index": idx,
             "status": status,
             "citations": clean_citations,
-            "reason": reason.strip(),
-            "counterexample": counterexample.strip(),
+            "reason": reason.strip()[:MAX_REASON],
+            "counterexample": counterexample.strip()[:MAX_COUNTEREXAMPLE],
             "coverage_milli": coverage,
         })
     summary = value["summary"]
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > MAX_SUMMARY:
+    if not isinstance(summary, str) or not summary.strip():
         return _unknown_reports([None] * invariant_count, "malformed leader report")
-    return {"reports": clean, "summary": summary.strip()}
+    return {"reports": clean, "summary": summary.strip()[:MAX_SUMMARY]}
 
 
 def _citations_exist(report, files):
@@ -343,7 +381,13 @@ class InvariantLens(gl.Contract):
                     "the bounded files cannot prove a safe conclusion. Return ONLY JSON with keys reports and summary. "
                     "Each ordered report must contain invariant_index, status (PASS|FAIL|UNKNOWN), citations "
                     "(0-3 objects with file_index,start_line,end_line,quote), reason, counterexample, and "
-                    f"coverage_milli (0-1000; PASS requires >= {COVERAGE_PASS_MIN}).\n"
+                    f"coverage_milli (integer 0-1000; PASS requires >= {COVERAGE_PASS_MIN}). "
+                    "Use integer indexes and line numbers. Keep quote <=1200 characters, reason and "
+                    "counterexample <=360 characters, and summary <=600 characters. Do not use Markdown. "
+                    "Example shape: {\"reports\":[{\"invariant_index\":0,\"status\":\"UNKNOWN\","
+                    "\"citations\":[],\"reason\":\"Insufficient evidence.\",\"counterexample\":"
+                    "\"A contrary implementation may exist outside the manifest.\",\"coverage_milli\":0}],"
+                    "\"summary\":\"Bounded evidence was inconclusive.\"}.\n"
                     f"INVARIANTS={_canonical(invariants)}\n<UNTRUSTED_SOURCES>{evidence}</UNTRUSTED_SOURCES>"
                 )
                 result = gl.nondet.exec_prompt(prompt, response_format="json")
@@ -386,10 +430,16 @@ class InvariantLens(gl.Contract):
             )
             try:
                 verdict = gl.nondet.exec_prompt(audit_prompt, response_format="json")
-                if not isinstance(verdict, dict) or set(verdict) != {"valid", "status_vector", "reason"}:
+                if not isinstance(verdict, dict) or not {"valid", "status_vector", "reason"}.issubset(verdict):
                     return False
                 expected = [row["status"] for row in candidate["reports"]]
-                if verdict["valid"] is not True or verdict["status_vector"] != expected:
+                valid = verdict["valid"]
+                if isinstance(valid, str):
+                    valid = valid.strip().lower() == "true"
+                vector = verdict["status_vector"]
+                if isinstance(vector, list):
+                    vector = [str(item).strip().upper() for item in vector]
+                if valid is not True or vector != expected:
                     return False
                 return True
             except Exception:
