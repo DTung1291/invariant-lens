@@ -276,6 +276,60 @@ def _citations_exist(report, files):
     return True
 
 
+def _citation_key(value):
+    """Canonicalize presentation-only differences in a source quotation."""
+    lines = []
+    for line in str(value).splitlines():
+        # The prompt contains numbered source, so providers may repeat a
+        # ``33:`` prefix even though it is not part of the fetched file.
+        lines.append(re.sub(r"^\s*\d+\s*:\s?", "", line))
+    text = " ".join(lines).replace("**", "").replace("`", "")
+    return " ".join(text.split())
+
+
+def _repair_citations(report, files):
+    """Bind provider quotations back to exact source spans.
+
+    Models can preserve the words while changing line wrapping, Markdown
+    emphasis, or copying the prompt's line-number prefix.  For each citation we
+    search only its declared file, select the shortest matching span, then
+    replace the provider quote and line numbers with exact fetched source.
+    Nothing is accepted merely by similarity: the canonicalized quote must be
+    a literal substring of a canonicalized source span.
+    """
+    repaired = {"reports": [], "summary": report["summary"]}
+    for row in report["reports"]:
+        clean_row = dict(row)
+        clean_row["citations"] = []
+        for citation in row["citations"]:
+            fi = citation["file_index"]
+            if fi >= len(files):
+                return None
+            lines = files[fi]["content"].splitlines()
+            wanted = _citation_key(citation["quote"])
+            if not wanted:
+                return None
+            match = None
+            for width in range(1, min(12, len(lines)) + 1):
+                for start in range(0, len(lines) - width + 1):
+                    span = "\n".join(lines[start:start + width])
+                    if wanted in _citation_key(span):
+                        match = {
+                            "file_index": fi,
+                            "start_line": start + 1,
+                            "end_line": start + width,
+                            "quote": span.strip(),
+                        }
+                        break
+                if match is not None:
+                    break
+            if match is None or not match["quote"] or len(match["quote"]) > 1200:
+                return None
+            clean_row["citations"].append(match)
+        repaired["reports"].append(clean_row)
+    return repaired
+
+
 def _derive_outcome(reports):
     statuses = [row["status"] for row in reports]
     if any(status == "FAIL" for status in statuses):
@@ -392,6 +446,9 @@ class InvariantLens(gl.Contract):
                 )
                 result = gl.nondet.exec_prompt(prompt, response_format="json")
                 normal = _normalise_report(result, len(invariants))
+                normal = _repair_citations(normal, files)
+                if normal is None:
+                    return _unknown_reports(invariants, "leader citations do not match source lines")
                 if not _citations_exist(normal, files):
                     return _unknown_reports(invariants, "leader citations do not match source lines")
                 return normal

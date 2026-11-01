@@ -319,6 +319,41 @@ class InvariantLensTests(unittest.TestCase):
         self.assertEqual(audit["outcome"], "INCONCLUSIVE")
         self.assertIn("citations do not match", audit["summary"])
 
+    def test_citation_line_numbers_and_wrapping_are_repaired_from_source(self):
+        pid = self.create_policy()
+        leader = report()
+        leader["reports"][0]["citations"] = [{
+            "file_index": "0",
+            "start_line": "99",
+            "end_line": "99",
+            "quote": "2: assert sender == owner",
+        }]
+        self.runtime.prompt_results = [leader, validator_accept()]
+        self.set_sender(AUDITOR)
+        audit_id = self.contract.audit(pid, self.manifest(), SHA)
+        stored = self.contract.get_audit(audit_id)["reports"][0]["citations"][0]
+        self.assertEqual(stored["start_line"], 2)
+        self.assertEqual(stored["end_line"], 2)
+        self.assertEqual(stored["quote"], "assert sender == owner")
+
+    def test_markdown_emphasis_is_a_presentation_only_citation_difference(self):
+        self.runtime.files["README.md"] = (
+            "# Demo\n\n2. **Evidence is immutable.** Every accepted URL embeds the same submitted\n"
+            "   40-character Git commit SHA.\n"
+        )
+        pid = self.create_policy(["Evidence URLs embed the submitted SHA."])
+        leader = report()
+        leader["reports"][0]["citations"] = [{
+            "file_index": 0,
+            "start_line": 3,
+            "end_line": 4,
+            "quote": "Evidence is immutable. Every accepted URL embeds the same submitted 40-character Git commit SHA.",
+        }]
+        self.runtime.prompt_results = [leader, validator_accept()]
+        self.set_sender(AUDITOR)
+        audit_id = self.contract.audit(pid, self.manifest(("README.md",)), SHA)
+        self.assertEqual(self.contract.get_audit(audit_id)["outcome"], "VERIFIED")
+
     def test_pass_without_citation_becomes_inconclusive(self):
         leader = report(citations=False)
         audit = self.run_audit(leader, validator_accept(("UNKNOWN",)))
